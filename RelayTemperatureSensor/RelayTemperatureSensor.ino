@@ -1,3 +1,11 @@
+#include <UIPServer.h>
+#include <UIPEthernet.h>
+#include <ethernet_comp.h>
+#include <UIPClient.h>
+#include <Dhcp.h>
+#include <UIPUdp.h>
+#include <Dns.h>
+
 
 #include <MySensor.h>
 #undef DEBUG
@@ -8,13 +16,15 @@
 
 // ---- NODE
 #define NODE_ID 110
-#define CHILD_ID_RELAY 1
+#define CHILD_ID_RELAY_AC 2 // Relay for Air conditioner
+#define CHILD_ID_RELAY 1    // Relay for heating
 #define CHILD_ID_TEMP 0
 
 // ----- RELAY
 #define RELAY_PIN  4  // Arduino Digital I/O pin number for first relay (second on pin+1 etc)
 #define RELAY_ON 1  // GPIO value to write to turn on attached relay
 #define RELAY_OFF 0 // GPIO value to write to turn off attached relay
+#define PUSH_TIMEOUT 500 // Simulate push button on AC with a relay (milliseconds)
 
 // ----- TEMPERATURE SENSOR
 #define ONE_WIRE_BUS 3 // Pin where dallas sensor is connected 
@@ -42,7 +52,7 @@ void setup()
   // Initialize library and add callback for incoming messages
   hw.begin(incomingMessage, NODE_ID, true);
   // Send the sketch version information to the gateway and Controller
-  hw.sendSketchInfo("Relay-Temperature Sensor", "2.0");
+  hw.sendSketchInfo("Relay-Temperature Sensor", "2.1");
 
   // --- TEMPERATURE
   // Startup OneWire
@@ -56,6 +66,8 @@ void setup()
 
   // --- RELAY
   hw.present(CHILD_ID_RELAY, S_LIGHT);
+  hw.present(CHILD_ID_RELAY_AC, S_LIGHT);
+
   // Then set relay pins in output mode
   pinMode(RELAY_PIN, OUTPUT);
   // Set relay to last known state (using eeprom storage)
@@ -110,8 +122,13 @@ uint8_t sendValue(MyMessage &msg)
 }
 
 void incomingMessage(const MyMessage &message) {
+  processHeatingMessage(message);
+  processACMessage(message);
+}
+
+void processHeatingMessage(const MyMessage &message) {
   // We only expect one type of message from controller. But we better check anyway.
-  if (message.type == V_LIGHT) {
+  if (message.sensor == CHILD_ID_RELAY && message.type == V_LIGHT) {
     // Change relay state
     digitalWrite(RELAY_PIN, message.getBool() ? RELAY_ON : RELAY_OFF);
     // Store state in eeprom
@@ -120,4 +137,13 @@ void incomingMessage(const MyMessage &message) {
   }
 }
 
+void processACMessage(const MyMessage &message) {
+  // We only expect one type of message from controller. But we better check anyway.
+  if (message.sensor == CHILD_ID_RELAY_AC && message.type == V_LIGHT) {
+    digitalWrite(RELAY_PIN, RELAY_ON);
+    hw.wait(PUSH_TIMEOUT);
+    digitalWrite(RELAY_PIN, RELAY_OFF);
+    debug(PSTR("Push button: %d \n"), message.sensor);
+  }
+}
 
