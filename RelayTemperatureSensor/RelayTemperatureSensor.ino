@@ -16,6 +16,7 @@
 
 // ---- NODE
 #define NODE_ID 110
+#define CHILD_ID_MODE 3 // MODE true: AC, false: Heating
 #define CHILD_ID_RELAY_AC 2 // Relay for Air conditioner
 #define CHILD_ID_RELAY 1    // Relay for heating
 #define CHILD_ID_TEMP 0
@@ -46,6 +47,7 @@ uint8_t numSensors = 0;
 // ----- GLOBAL
 MySensor hw;
 static char outstr[15];
+static uint8_t MODE = 0;
 
 void setup()
 {
@@ -67,6 +69,10 @@ void setup()
   // --- RELAY
   hw.present(CHILD_ID_RELAY, S_LIGHT);
   hw.present(CHILD_ID_RELAY_AC, S_LIGHT);
+  hw.present(CHILD_ID_MODE, S_LIGHT);
+  
+  // Set last mode 
+  MODE = hw.loadState(CHILD_ID_MODE);
 
   // Then set relay pins in output mode
   pinMode(RELAY_PIN, OUTPUT);
@@ -124,11 +130,12 @@ uint8_t sendValue(MyMessage &msg)
 void incomingMessage(const MyMessage &message) {
   processHeatingMessage(message);
   processACMessage(message);
+  processModeMessage(message);
 }
 
 void processHeatingMessage(const MyMessage &message) {
   // We only expect one type of message from controller. But we better check anyway.
-  if (message.sensor == CHILD_ID_RELAY && message.type == V_LIGHT) {
+  if (!MODE && message.sensor == CHILD_ID_RELAY && message.type == V_LIGHT) {
     // Change relay state
     digitalWrite(RELAY_PIN, message.getBool() ? RELAY_ON : RELAY_OFF);
     // Store state in eeprom
@@ -139,11 +146,19 @@ void processHeatingMessage(const MyMessage &message) {
 
 void processACMessage(const MyMessage &message) {
   // We only expect one type of message from controller. But we better check anyway.
-  if (message.sensor == CHILD_ID_RELAY_AC && message.type == V_LIGHT) {
+  if (MODE && message.sensor == CHILD_ID_RELAY_AC && message.type == V_LIGHT) {
     digitalWrite(RELAY_PIN, RELAY_ON);
     hw.wait(PUSH_TIMEOUT);
     digitalWrite(RELAY_PIN, RELAY_OFF);
     debug(PSTR("Push button: %d \n"), message.sensor);
+  }
+}
+
+void processModeMessage(const MyMessage &message) {
+  if (message.sensor == CHILD_ID_MODE && message.type == V_LIGHT) {
+    MODE = message.getBool();
+    // Store state in eeprom
+    hw.saveState(CHILD_ID_MODE, MODE);
   }
 }
 
