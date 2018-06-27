@@ -1,12 +1,3 @@
-#include <UIPServer.h>
-#include <UIPEthernet.h>
-#include <ethernet_comp.h>
-#include <UIPClient.h>
-#include <Dhcp.h>
-#include <UIPUdp.h>
-#include <Dns.h>
-
-
 #include <MySensor.h>
 #undef DEBUG
 #include "debug.h"
@@ -16,8 +7,8 @@
 
 // ---- NODE
 #define NODE_ID 110
-#define CHILD_ID_MODE 3 // MODE true: AC, false: Heating
-#define CHILD_ID_RELAY_AC 2 // Relay for Air conditioner
+#define CHILD_ID_LDR 3
+#define CHILD_ID_MODE 2 // MODE true: AC, false: Heating
 #define CHILD_ID_RELAY 1    // Relay for heating
 #define CHILD_ID_TEMP 0
 
@@ -27,17 +18,26 @@
 #define RELAY_OFF 0 // GPIO value to write to turn off attached relay
 #define PUSH_TIMEOUT 500 // Simulate push button on AC with a relay (milliseconds)
 
+// LDR SENSOR
+#define LDR_PIN A2
+
 // ----- TEMPERATURE SENSOR
 #define ONE_WIRE_BUS 3 // Pin where dallas sensor is connected 
 const float TEMPERATURE_DELTA = 0.2; // Change of temperature to notify
-const unsigned int READ_INTERVAL = 13; //READ Interval in seconds
+const unsigned int READ_INTERVAL = 3; //READ Interval in seconds
 const unsigned long SLEEP_TIME = READ_INTERVAL * 1000; // Sleep time between reads (in milliseconds)
 
 const unsigned int MAX_ITERATION = (60 / READ_INTERVAL) * 3; // 3 minutes
 unsigned int iteration = 0;
 
+// Initialize message LDR
+MyMessage msgLDR(CHILD_ID_LDR, V_LEVEL);
+
 // Initialize temperature message
 MyMessage msgTemperature(CHILD_ID_TEMP, V_TEMP);
+
+// Initialize RELAY message
+MyMessage msgRelay(CHILD_ID_RELAY, V_LIGHT);
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature temperatureSensor(&oneWire);
@@ -48,9 +48,11 @@ uint8_t numSensors = 0;
 MySensor hw;
 static char outstr[15];
 static uint8_t MODE = 0;
+uint8_t lastLDR = 0;
 
 void setup()
 {
+  Serial.begin(115200); 
   // Initialize library and add callback for incoming messages
   hw.begin(incomingMessage, NODE_ID, true);
   // Send the sketch version information to the gateway and Controller
@@ -68,8 +70,8 @@ void setup()
 
   // --- RELAY
   hw.present(CHILD_ID_RELAY, S_LIGHT);
-  hw.present(CHILD_ID_RELAY_AC, S_LIGHT);
-  hw.present(CHILD_ID_MODE, S_LIGHT);
+  hw.present(CHILD_ID_MODE, S_BINARY);
+  hw.present(CHILD_ID_LDR, S_LIGHT_LEVEL);
   
   // Set last mode 
   MODE = hw.loadState(CHILD_ID_MODE);
@@ -93,6 +95,9 @@ void loop()
   if (numSensors > 0 ) {
     sendTemperature(readTemperature());
   }
+  sendLDRStatus(analogRead(LDR_PIN));
+  
+  iteration = (iteration + 1) % MAX_ITERATION;
   
   hw.wait(SLEEP_TIME);
 }
@@ -116,9 +121,17 @@ void sendTemperature(float temperature) {
   if ((iteration == 0) || temperatureChanged(lastTemperature, temperature)) {
     debug(PSTR("Send temperature %s\n"), dtostrf(temperature, 2, 1, outstr));
     lastTemperature= temperature;
-    iteration = sendValue(msgTemperature.set(temperature, 1));
+    sendValue(msgTemperature.set(temperature, 1));
   }
-  iteration = (iteration + 1) % MAX_ITERATION;
+}
+
+
+void sendLDRStatus(uint8_t value) {
+   if ((iteration == 0) || (lastLDR - value) != 0) {
+    debug(PSTR("Send LDR value %s\n"), dtostrf(value, 2, 1, outstr));
+    lastLDR= value;
+    sendValue(msgLDR.set(value, 1));
+   }   
 }
 
 uint8_t sendValue(MyMessage &msg)
@@ -128,9 +141,9 @@ uint8_t sendValue(MyMessage &msg)
 }
 
 void incomingMessage(const MyMessage &message) {
+  processModeMessage(message);
   processHeatingMessage(message);
   processACMessage(message);
-  processModeMessage(message);
 }
 
 void processHeatingMessage(const MyMessage &message) {
@@ -146,11 +159,13 @@ void processHeatingMessage(const MyMessage &message) {
 
 void processACMessage(const MyMessage &message) {
   // We only expect one type of message from controller. But we better check anyway.
-  if (MODE && message.sensor == CHILD_ID_RELAY_AC && message.type == V_LIGHT) {
+  if (MODE && message.sensor == CHILD_ID_RELAY && message.type == V_LIGHT && message.getBool() == RELAY_ON) {
     digitalWrite(RELAY_PIN, RELAY_ON);
     hw.wait(PUSH_TIMEOUT);
     digitalWrite(RELAY_PIN, RELAY_OFF);
     debug(PSTR("Push button: %d \n"), message.sensor);
+    uint8_t value = RELAY_OFF;
+    sendValue(msgRelay.set(value,1));
   }
 }
 
